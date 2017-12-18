@@ -1,19 +1,25 @@
 let Application = PIXI.Application;
 let Graphics = PIXI.Graphics;
 let PIXI_WIDTH = 2000;
-let PIXI_HEIGHT = 500;
+let PIXI_HEIGHT = 750;
 let RANDOM_POINTS = 15;
-let SLEEP_TIME = 500;
+let SLEEP_MAX = 101;
+
+let HALT = false;
 
 function mod(n, m) {
-        return ((n % m) + m) % m;
+	return ((n % m) + m) % m;
 }
 
 function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function makeClickable(stage, pointList){
+function sleep_time(){
+	return (101 - $("#speed").val()) * 10;
+}
+
+function makeClickable(stage, bookkeeper){
 	let clickPlane = new Graphics();
 	clickPlane.beginFill(0x000000);
 	clickPlane.drawRect(0,0,PIXI_WIDTH,PIXI_HEIGHT);
@@ -24,7 +30,7 @@ function makeClickable(stage, pointList){
 		let pos = mouseData.data.getLocalPosition(mouseData.target);
 		let x = pos.x;
 		let y = pos.y;
-		addPoint(x, y, pointList, stage);
+		addPoint(x, y, bookkeeper.pointList, stage);
 	});
 	stage.addChild(clickPlane);
 }
@@ -67,12 +73,33 @@ function addPoint(x, y, pointList, stage) {
 	return p;
 }
 
-async function mergeHull(pointList, stage){
-	pointList.sort(function(a,b){return a.x - b.x;})
-	await mergeHullHelper(pointList, stage, 0, pointList.length-1);
+function removeDups(pointList, stage){
+	if (pointList.length <= 1){
+		return;
+	}
+	let indices = [];
+	for (let i = 1; i < pointList.length; ++i){
+		let a = pointList[i];
+		let b = pointList[i-1];
+		if (a.x === b.x && a.y === b.y){
+			indices.push(i);
+		}
+	}
+	for (let i = indices.length - 1; i > -1; i--){
+		let a = pointList[indices[i]];
+		stage.removeChild(a.pix);
+		pointList.splice(indices[i],1);
+	}
 }
 
-function threeHull(pointList, stage, i, j){
+async function mergeHull(pointList, segList, stage){
+	clearhull(segList, stage);
+	pointList.sort(function(a,b){return a.x - b.x;})
+	removeDups(pointList, stage);
+	await mergeHullHelper(pointList, segList, stage, 0, pointList.length-1);
+}
+
+function threeHull(pointList, segList, stage, i, j){
 	let hull = new Hull();
 	if ((j - i + 1) == 2){
 		let a = pointList[i];
@@ -80,8 +107,10 @@ function threeHull(pointList, stage, i, j){
 		
 		let ab = new Segment(a, b);
 		ab.pix = drawSegment(a, b, 0x00FF00, stage);
+		segList.push(ab);
 		let ba = new Segment(b, a);
 		ba.pix = drawSegment(b, a, 0x00FF00, stage);
+		segList.push(ba);
 
 		hull.vertices = [a, b];
 		hull.edges = [ab, ba];
@@ -97,10 +126,13 @@ function threeHull(pointList, stage, i, j){
 		}
 		let ab = new Segment(a, b);
 		ab.pix = drawSegment(a, b, 0x00FF00, stage);
+		segList.push(ab);
 		let bc = new Segment(b, c);
 		bc.pix = drawSegment(b, c, 0x00FF00, stage);
+		segList.push(bc);
 		let ca = new Segment(c, a);
 		ca.pix = drawSegment(c, a, 0x00FF00, stage);
+		segList.push(ca);
 
 		hull.vertices = [a, b, c];
 		hull.edges = [ab, bc, ca];
@@ -108,7 +140,7 @@ function threeHull(pointList, stage, i, j){
 	return hull;
 }
 
-async function mergeHullHelper(pointList, stage, i, j){
+async function mergeHullHelper(pointList, segList, stage, i, j){
 	i = Math.max(0, i);
 	j = Math.min(pointList.length-1, j);
 	//console.log("called with "+i+"and "+j);
@@ -124,21 +156,21 @@ async function mergeHullHelper(pointList, stage, i, j){
 		pointList[k].pix.drawCircle(pointList[k].x, pointList[k].y, 5);
 		pointList[k].pix.endFill();
 	}
-	await sleep(SLEEP_TIME);
+	await sleep(sleep_time());
 	if ((j - i + 1) <= 3){
-		return threeHull(pointList, stage, i, j);
+		return threeHull(pointList, segList, stage, i, j);
 	}
 	let mid = Math.trunc((j - i) / 2) + i;
-	let ha = await mergeHullHelper(pointList, stage, i, mid);
-	let hb = await mergeHullHelper(pointList, stage, mid+1, j);
-	let hull = await merge(ha, hb, stage);
+	let ha = await mergeHullHelper(pointList, segList, stage, i, mid);
+	let hb = await mergeHullHelper(pointList, segList, stage, mid+1, j);
+	let hull = await merge(ha, hb, stage, segList);
 	return hull;
 }
 
-async function merge(hulla, hullb, stage) {
+async function merge(hulla, hullb, stage, segList) {
 	// /let utangent = await upperTangent(hulla, hullb, pointList, stage, i, mid, j);
-	let ltangent = await lowerTangent(hulla, hullb, stage);
-	let utangent = await upperTangent(hulla, hullb, stage);
+	let ltangent = await lowerTangent(hulla, hullb, stage, segList);
+	let utangent = await upperTangent(hulla, hullb, stage, segList);
 
 	stage.removeChild(ltangent.pix);
 	ltangent.pix = drawSegment(ltangent.a, ltangent.b, 0x00FF00, stage);
@@ -153,7 +185,6 @@ async function merge(hulla, hullb, stage) {
 	hulla.edges.push(utangent);
 
 	hulla.vertices = hulla.vertices.concat(hullb.vertices);
-	console.log(hulla);
 	return hulla;
 }
 
@@ -193,14 +224,15 @@ function spliceHull(hull, stage, left) {
 	}
 }
 
-async function upperTangent(hulla, hullb, stage){
+async function upperTangent(hulla, hullb, stage, segList){
 	hulla.utangent = rightmost(hulla);
 	hullb.utangent = leftmost(hullb);
 	let a = hulla.vertices[hulla.utangent];
 	let b = hullb.vertices[hullb.utangent];
 	let ab = new Segment(a, b);
 	ab.pix = drawSegment(a, b, 0x0000FF, stage);
-	await sleep(SLEEP_TIME);
+	segList.push(ab);
+	await sleep(sleep_time());
 	while(!(upperTangentCond(hulla, ab, true) && upperTangentCond(hullb, ab, false))){
 		while (!upperTangentCond(hulla, ab, true)){
 			stage.removeChild(ab.pix);
@@ -209,7 +241,8 @@ async function upperTangent(hulla, hullb, stage){
 			a = hulla.vertices[hulla.utangent];
 			ab = new Segment(a, b);
 			ab.pix = drawSegment(a, b, 0x0000FF, stage);
-			await sleep(SLEEP_TIME);
+			segList.push(ab);
+			await sleep(sleep_time());
 		}
 		while (!upperTangentCond(hullb, ab, false)){
 			stage.removeChild(ab.pix);
@@ -217,7 +250,8 @@ async function upperTangent(hulla, hullb, stage){
 			b = hullb.vertices[hullb.utangent];
 			ab = new Segment(a, b);
 			ab.pix = drawSegment(a, b, 0x0000FF, stage);
-			await sleep(SLEEP_TIME);
+			segList.push(ab);
+			await sleep(sleep_time());
 		}
 	}
 	return ab;
@@ -243,14 +277,15 @@ function upperTangentCond(hull, seg, left){
 	}
 }
 
-async function lowerTangent(hulla, hullb, stage){
+async function lowerTangent(hulla, hullb, stage, segList){
 	hulla.ltangent = rightmost(hulla);
 	hullb.ltangent = leftmost(hullb);
 	let a = hulla.vertices[hulla.ltangent];
 	let b = hullb.vertices[hullb.ltangent];
 	let ab = new Segment(a, b);
 	ab.pix = drawSegment(a, b, 0x0000FF, stage);
-	await sleep(SLEEP_TIME);
+	segList.push(ab);
+	await sleep(sleep_time());
 	while(!(lowerTangentCond(hulla, ab, true) && lowerTangentCond(hullb, ab, false))){
 		while (!lowerTangentCond(hulla, ab, true)){
 			stage.removeChild(ab.pix);
@@ -259,7 +294,8 @@ async function lowerTangent(hulla, hullb, stage){
 			a = hulla.vertices[hulla.ltangent];
 			ab = new Segment(a, b);
 			ab.pix = drawSegment(a, b, 0x0000FF, stage);
-			await sleep(SLEEP_TIME);
+			segList.push(ab);
+			await sleep(sleep_time());
 		}
 		while (!lowerTangentCond(hullb, ab, false)){
 			stage.removeChild(ab.pix);
@@ -267,7 +303,8 @@ async function lowerTangent(hulla, hullb, stage){
 			b = hullb.vertices[hullb.ltangent];
 			ab = new Segment(a, b);
 			ab.pix = drawSegment(a, b, 0x0000FF, stage);
-			await sleep(SLEEP_TIME);
+			segList.push(ab);
+			await sleep(sleep_time());
 		}
 	}
 	return ab;
@@ -317,16 +354,45 @@ function rightmost(hull){
 	return maxi;
 }
 
+function clearhull(segList, stage) {
+	for (let i = 0; i < segList.length; ++i){
+		stage.removeChild(segList[i].pix);
+	}
+	segList = [];
+}
+
 $(document).ready(function(){
 	let app = new Application({width: PIXI_WIDTH, height:PIXI_HEIGHT});
 	let stage = app.stage;
 	let renderer = app.renderer;
 	document.body.appendChild(app.view);
 	let pointList = [];
+	let segList = [];
+
+	function BookKeeper(pointList){
+		this.pointList = pointList;
+	}
+	bookkeeper = new BookKeeper(pointList);
 
 	$("#random").click(function(e) {randomPoints(RANDOM_POINTS, pointList, stage);});
-	$("#run").click(function(e) {mergeHull(pointList, stage)});
+	$("#run").click(function(e) {
+		mergeHull(pointList, segList, stage);
+	});
+	$("#clear").click(function(e) {
+		for (let i = 0; i < pointList.length; ++i){
+			stage.removeChild(pointList[i].pix);
+		}
+		pointList = [];
+		bookkeeper.pointList = pointList;
+		for (let i = 0; i < segList.length; ++i){
+			stage.removeChild(segList[i].pix);
+		}
+		segList = [];
+	});
+	$("#clearhull").click(function(e) {
+		clearhull(segList, stage);
+	});
 
-	makeClickable(stage, pointList);
+	makeClickable(stage, bookkeeper);
 
 });
